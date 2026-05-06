@@ -1,0 +1,3 @@
+: SQUARE DUP * ;
+: DOUBLE DUP + ;
+: QUAD DOUBLE DOUBLE ;
