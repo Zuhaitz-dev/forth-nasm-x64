@@ -36,8 +36,12 @@ read_line:
 
     do_sys_write prompt_str, 2
 
-    do_sys_read tib, TERMINAL_INPUT_BUFFER_SIZE
-    
+    do_sys_read rdi, tib, TERMINAL_INPUT_BUFFER_SIZE
+
+    ; We check for EOF or errors to exit gracefully.
+    cmp rax, 0
+    jle .eof_reached
+
     ; Update parsing vars.
     mov [num_tib], rax      ; Total bytes read
     mov qword [to_in], 0    ; Reset >IN back to index 0
@@ -45,6 +49,11 @@ read_line:
     pop r11 
     pop rcx 
     ret
+
+.eof_reached:
+    mov rax, SYS_EXIT
+    xor rdi, rdi
+    syscall
 
 ; Native word reader.
 ; Returns: addr in r8, length in r9.
@@ -131,6 +140,48 @@ defcode "2DUP", TWODUP
 ; DROP ( a -- )
 defcode "DROP", DROP
     add dsp, 8      ; Shrink stack upwards.
+    NEXT
+
+; INCLUDED ( addr len -- )
+; Opens file and pushes the input source into stack.
+defcode "INCLUDED", INCLUDED
+    mov rcx, [dsp]
+    mov rsi, [dsp + 8]
+    add dsp, 16
+
+    ; Copy string to null-terminated buffer for syscall
+    mov rdi, filename_buf
+    rep movsb
+    mov byte [rdi], 0   ; Append null terminator
+
+    ; Push current source_id to include_stack
+    mov rax, [source_id]
+    mov rbx, [include_sp]
+    mov [rbx], rax
+    add rbx, 8
+    mov [include_sp], rbx
+
+    ; PERHAPS, perhaps I will add a macro for this.
+    mov rax, SYS_OPEN
+    mov rdi, filename_buf
+    xor rsi, rsi        ; O_RDONLY flag (0)
+    xor rdx, rdx        ; mode (0)
+    syscall
+
+    ; Check for error.
+    cmp rax, 0
+    jl .file_error
+
+    ; Set new source_id (all good).
+    mov [source_id], rax
+    NEXT
+
+.file_error:
+    ; If open fails, restore the stack pointer and silently fail for now
+    ; (In a full system, you would THROW an exception here)
+    mov rbx, [include_sp]
+    sub rbx, 8
+    mov [include_sp], rbx
     NEXT
 
 ; LIT ( a -- )
@@ -568,6 +619,10 @@ data_stack_top:
     
     user_dict: resb DICTIONARY_SIZE
 
+    ; > File inclusion state.
+    include_stack: resq 8       ; Support up to 8 levels of nested includes.
+    filename_buf:  resb 256     ; Buffer to null-terminate filenames
+
 section .data
     latest: dq link
     prompt_str: db "> "
@@ -579,6 +634,10 @@ section .data
     ; > Compiler variables.
     state: dq 0             ; 0 = Interpreting, 1 = Compiling
     here:  dq user_dict     ; Points to the next free byte in user_dict...
+
+    ; > File inclusion variables...
+    include_sp: dq include_stack
+    source_id:  dq STDIN
 
     align 8
     ; > Infinite repl loop. 

@@ -9,16 +9,22 @@
 %ifdef LINUX
     %define SYS_READ  0
     %define SYS_WRITE 1
+    %define SYS_OPEN  2
+    %define SYS_CLOSE 3
     %define SYS_EXIT  60
     %define STDIN     0
-    %define STDOUT    1 
+    %define STDOUT    1
+    %define STDERR    2
 %elifdef MACOS
     ; BSD syscalls require a 0x2000000 offset
     %define SYS_READ  0x2000003
     %define SYS_WRITE 0x2000004
+    %define SYS_OPEN  0x2000005
+    %define SYS_CLOSE 0x2000006
     %define SYS_EXIT  0x2000001
     %define STDIN     0
     %define STDOUT    1
+    %define STDERR    2
 %else
     %error "FATAL: You must define an OS! (Pass -D LINUX or -D MACOS to nasm)"
 %endif
@@ -78,11 +84,11 @@ name_%2:
 %endmacro
 
 ; > Syscall helper macros
-%macro do_sys_read 2
+%macro do_sys_read 3
     mov rax, SYS_READ
-    mov rdi, STDIN
-    mov rsi, %1         ; Buffer address.
-    mov rdx, %2         ; Length.
+    mov rdi, %1         ; File descriptor.
+    mov rsi, %2         ; Buffer address.
+    mov rdx, %3         ; Length.
     syscall
 %endmacro
 
