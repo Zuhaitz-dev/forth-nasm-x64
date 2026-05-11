@@ -717,6 +717,30 @@ defcode "(", PAREN, F_IMMED
 .done:
     NEXT
 
+; >R ( a -- ) (R: -- a )
+; Pops the top of the data stack and pushes it to the return stack.
+defcode ">R", TO_R
+    mov rax, [dsp]  ; read top.
+    add dsp, 8
+    push rax
+    NEXT
+
+; R> ( -- a ) (R: a -- )
+; Pops the top of the return stack and pushes it to the data stack.
+defcode "R>", R_FROM
+    pop rax 
+    sub dsp, 8
+    mov [dsp], rax
+    NEXT
+
+; R@ ( -- a ) (R: a -- a )
+; Copies instead of popping.
+defcode "R@", R_FETCH
+    mov rax, [rsp]
+    sub dsp, 8
+    mov [dsp], rax
+    NEXT
+
 ; EXIT ( -- )
 ; Return from colon definition.
     defcode "EXIT", EXIT
