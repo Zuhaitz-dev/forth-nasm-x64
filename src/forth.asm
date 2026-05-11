@@ -23,6 +23,35 @@ _start:
     ;   We point rbp to the top of the reserved memory block.
     mov dsp, data_stack_top
 
+; > Command line argument parsing.
+mov rax, [rsp]  ; grab argc.
+cmp rax, 1 
+jle .start_repl ; If argc <= 1 then no files passed.
+
+mov rdi, [rsp + 16] ; Point to the filename string.
+
+; TODO: these could be some macros.
+mov rax, SYS_OPEN
+xor rsi, rsi        ; O_RDONLY flag (0)
+xor rdx, rdx        ; mode (0)
+syscall
+
+; Check if opened...
+cmp rax, 0
+jl .start_repl  ; If it fails we just ignore and start REPL 
+                ; This could be improved (TODO).
+
+; Success, so we push STDIN to the include stack.
+mov rbx, [source_id]
+mov rcx, [include_sp]
+mov [rcx], rbx
+add rcx, 8
+mov [include_sp], rcx
+
+; Then set new source_id to our newly opened file! :D 
+mov [source_id], rax
+
+.start_repl:
     ; Set our instruction pointer to our test program...
     mov ip, repl_loop
 
@@ -34,14 +63,22 @@ read_line:
     push rcx 
     push r11 
 
+    ; Only print prompt if we are reading from STDIN (0)
+    mov rdi, [source_id]
+    test rdi, rdi
+    jnz .skip_prompt
     do_sys_write prompt_str, 2
+.skip_prompt:
 
+    ; --- THE CRITICAL FIX ---
+    ; Explicitly load the current file descriptor into rdi
+    mov rdi, [source_id]
     do_sys_read rdi, tib, TERMINAL_INPUT_BUFFER_SIZE
-
-    ; We check for EOF or errors to exit gracefully.
+    
+    ; Check if we hit EOF (0) or an error (< 0)
     cmp rax, 0
     jle .eof_reached
-
+    
     ; Update parsing vars.
     mov [num_tib], rax      ; Total bytes read
     mov qword [to_in], 0    ; Reset >IN back to index 0
@@ -51,6 +88,28 @@ read_line:
     ret
 
 .eof_reached:
+    mov rdi, [source_id]
+    test rdi, rdi
+    jz .exit_program        ; EOF on STDIN (Ctrl+D or piped EOF) -> Exit Forth
+
+    ; We hit EOF on a file. Close it.
+    mov rax, SYS_CLOSE
+    syscall                 ; rdi already contains source_id
+
+    ; Pop previous source_id from the include stack
+    mov rbx, [include_sp]
+    sub rbx, 8
+    mov [include_sp], rbx
+    mov rcx, [rbx]
+    mov [source_id], rcx
+
+    ; We just dropped back to the previous file/stdin.
+    ; We need to read a line from IT immediately to continue parsing.
+    pop r11
+    pop rcx
+    jmp read_line           ; Loop back to the top of read_line!
+
+.exit_program:
     mov rax, SYS_EXIT
     xor rdi, rdi
     syscall
@@ -102,12 +161,19 @@ parse_number_native:
     test rcx, rcx
     jz .done
     mov bl, [r10]
+    cmp bl, '0'
+    jl .not_a_number
+    cmp bl, '9'
+    jg .not_a_number
     sub bl, '0'
     imul rax, 10
     add rax, rbx
     inc r10
     dec rcx
     jmp .loop
+.not_a_number:
+    xor rax, rax
+    ret
 .done:
     ret
 
