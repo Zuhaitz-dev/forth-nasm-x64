@@ -23,3 +23,10 @@
 : GREETING ( -- )
     S" Welcome to Assembly Forth!" TYPE CR
 ;
+
+: NEGATE 0 SWAP - ;
+
+: ABS 
+    DUP 0 < IF NEGATE THEN 
+;
+

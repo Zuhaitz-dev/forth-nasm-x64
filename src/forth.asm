@@ -23,33 +23,32 @@ _start:
     ;   We point rbp to the top of the reserved memory block.
     mov dsp, data_stack_top
 
-; > Command line argument parsing.
-mov rax, [rsp]  ; grab argc.
-cmp rax, 1 
-jle .start_repl ; If argc <= 1 then no files passed.
+    ; > Command line argument parsing.
+    mov rax, [rsp]  ; grab argc.
+    cmp rax, 1 
+    jle .start_repl ; If argc <= 1 then no files passed.
 
-mov rdi, [rsp + 16] ; Point to the filename string.
+    mov rdi, [rsp + 16] ; Point to the filename string.
 
-; TODO: these could be some macros.
-mov rax, SYS_OPEN
-xor rsi, rsi        ; O_RDONLY flag (0)
-xor rdx, rdx        ; mode (0)
-syscall
+    ; TODO: these could be some macros.
+    mov rax, SYS_OPEN
+    xor rsi, rsi        ; O_RDONLY flag (0)
+    xor rdx, rdx        ; mode (0)
+    syscall
 
-; Check if opened...
-cmp rax, 0
-jl .start_repl  ; If it fails we just ignore and start REPL 
+    ; Check if opened...
+    cmp rax, 0
+    jl .start_repl  ; If it fails we just ignore and start REPL 
                 ; This could be improved (TODO).
 
-; Success, so we push STDIN to the include stack.
-mov rbx, [source_id]
-mov rcx, [include_sp]
-mov [rcx], rbx
-add rcx, 8
-mov [include_sp], rcx
+    ; Save STDIN (0) to depth 0 of our new state stack.
+    mov qword [include_state_stack], 0      ; Save STDIN source_id.
+    mov qword [include_state_stack + 8], 0  ; Save STDIN num_tib.
+    mov qword [include_state_stack + 16], 0 ; Save STDIN to_in.
+    mov qword [include_depth], 1            ; Advance to depth 1.
 
-; Then set new source_id to our newly opened file! :D 
-mov [source_id], rax
+    ; Then set new source_id to our newly opened file! :D 
+    mov [source_id], rax
 
 .start_repl:
     ; Set our instruction pointer to our test program...
@@ -96,18 +95,35 @@ read_line:
     mov rax, SYS_CLOSE
     syscall                 ; rdi already contains source_id
 
-    ; Pop previous source_id from the include stack
-    mov rbx, [include_sp]
-    sub rbx, 8
-    mov [include_sp], rbx
+    ; > Restore parser state.
+    dec qword [include_depth]
+    mov rax, [include_depth]
+    
+    ; Calculate state offset (depth * 24).
+    mov rbx, rax
+    imul rbx, 24
+    lea rbx, [include_state_stack + rbx]
+    
     mov rcx, [rbx]
     mov [source_id], rcx
+    mov rcx, [rbx + 8]
+    mov [num_tib], rcx
+    mov rcx, [rbx + 16]
+    mov [to_in], rcx
+    
+    ; Restore tib buffer.
+    ; Calculate TIB offset (depth * 4096)
+    mov rsi, rax
+    imul rsi, 4096
+    lea rsi, [tib_backup + rsi]
+    
+    mov rdi, tib
+    mov rcx, 4096
+    rep movsb
 
-    ; We just dropped back to the previous file/stdin.
-    ; We need to read a line from IT immediately to continue parsing.
     pop r11
     pop rcx
-    jmp read_line           ; Loop back to the top of read_line!
+    ret
 
 .exit_program:
     mov rax, SYS_EXIT
@@ -210,46 +226,64 @@ defcode "DROP", DROP
 
 ; INCLUDED ( addr len -- )
 ; Opens file and pushes the input source into stack.
+; INCLUDED ( addr len -- )
 defcode "INCLUDED", INCLUDED
     push ip
     mov rcx, [dsp]
     mov rsi, [dsp + 8]
     add dsp, 16
 
-    ; Copy string to null-terminated buffer for syscall
+    ; Copy string to null-terminated buffer.
     mov rdi, filename_buf
     rep movsb
-    mov byte [rdi], 0   ; Append null terminator
+    mov byte [rdi], 0   
 
-    ; Push current source_id to include_stack
-    mov rax, [source_id]
-    mov rbx, [include_sp]
-    mov [rbx], rax
-    add rbx, 8
-    mov [include_sp], rbx
+    ; > Save parser state.
+    mov rax, [include_depth]
+    
+    ; Calculate offset for state stack (depth * 24).
+    mov rbx, rax
+    imul rbx, 24
+    lea rbx, [include_state_stack + rbx]
+    
+    mov rcx, [source_id]
+    mov [rbx], rcx
+    mov rcx, [num_tib]
+    mov [rbx + 8], rcx
+    mov rcx, [to_in]
+    mov [rbx + 16], rcx
+    
+    ; > Backup tib buffer.
+    ; Calculate offset for TIB backup (depth * 4096).
+    mov rdi, rax
+    imul rdi, 4096
+    lea rdi, [tib_backup + rdi]
+    
+    mov rsi, tib
+    mov rcx, 4096
+    rep movsb               ; Instantly copy the 4 kilobytes from rsi to rdi...
 
-    ; PERHAPS, perhaps I will add a macro for this.
+    inc qword [include_depth]
+
     mov rax, SYS_OPEN
     mov rdi, filename_buf
-    xor rsi, rsi        ; O_RDONLY flag (0)
-    xor rdx, rdx        ; mode (0)
+    xor rsi, rsi        
+    xor rdx, rdx        
     syscall
 
-    ; Check for error.
     cmp rax, 0
     jl .file_error
 
-    ; Set new source_id (all good).
+    ; Set new source_id and RESET parser variables so it reads fresh.
     mov [source_id], rax
+    mov qword [num_tib], 0
+    mov qword [to_in], 0
+
     pop ip
     NEXT
 
 .file_error:
-    ; If open fails, restore the stack pointer and silently fail for now
-    ; (In a full system, you would THROW an exception here)
-    mov rbx, [include_sp]
-    sub rbx, 8
-    mov [include_sp], rbx
+    dec qword [include_depth]
     pop ip
     NEXT
 
@@ -342,6 +376,36 @@ defcode "*", MULT
     imul rbx, rax
     mov [dsp], rbx 
     NEXT 
+
+; /MOD ( a b -- remainder quotient )
+defcode "/MOD", DIVMOD
+    mov rbx, [dsp]      ; Pop divisor.
+    mov rax, [dsp + 8]  ; Pop dividend.
+    cqo                 ; NEVER FORGET THIS.
+    idiv rbx
+    mov [dsp + 8], rdx
+    mov [dsp], rax
+    NEXT
+
+; / ( a b -- quotient )
+defcode "/", DIVIDE
+    mov rbx, [dsp]
+    add dsp, 8
+    mov rax, [dsp]
+    cqo
+    idiv rbx
+    mov [dsp], rax      ; We don't care about the remainder.
+    NEXT
+
+; MOD ( a b -- remainder )
+defcode "MOD", MODULO
+    mov rbx, [dsp]
+    add dsp, 8
+    mov rax, [dsp]
+    cqo
+    idiv rbx
+    mov [dsp], rdx      ; Here's the other way around.
+    NEXT
 
 ; = ( a b -- flag )
 ; Pushes -1 if equal, 0 if not.
@@ -994,8 +1058,9 @@ data_stack_top:
     user_dict: resb DICTIONARY_SIZE
 
     ; > File inclusion state.
-    include_stack: resq 8       ; Support up to 8 levels of nested includes.
-    filename_buf:  resb 256     ; Buffer to null-terminate filenames
+    include_state_stack: resb 24 * 8        ; 8 levels * 24 bytes (source_id, num_tib, to_in)
+    tib_backup: resb 4096 * 8               ; 8 levels * 4096 bytes (Full TIB backups)
+    filename_buf:  resb 256
 
 section .data
     latest: dq link
@@ -1009,8 +1074,8 @@ section .data
     state: dq 0             ; 0 = Interpreting, 1 = Compiling
     here:  dq user_dict     ; Points to the next free byte in user_dict...
 
-    ; > File inclusion variables...
-    include_sp: dq include_stack
+    ; > File inclusion depth...
+    include_depth: dq 0
     source_id:  dq STDIN
 
     align 8
