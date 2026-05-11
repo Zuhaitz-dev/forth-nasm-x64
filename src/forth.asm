@@ -353,6 +353,33 @@ defcode "=", EQUALS
     mov [dsp], rax
     NEXT
 
+; < ( a b -- flag )
+; Pushes -1 if a < b, 0 otherwise.
+defcode "<", LESS_THAN
+    mov rax, [dsp]
+    add dsp, 8
+    mov rbx, [dsp]
+    cmp rbx, rax 
+    setl al     ; Set AL to 1 if rbx < rax
+                ; It's just almost the same than EQUALS...
+    movzx rax, al 
+    neg rax 
+    mov [dsp], rax
+    NEXT
+
+; > ( a b -- flag )
+; Pushes -1 if a > b, 0 otherwise.
+defcode ">", GREATER_THAN
+    mov rax, [dsp]
+    add dsp, 8
+    mov rbx, [dsp]
+    cmp rbx, rax 
+    setg al 
+    movzx rax, al 
+    neg rax 
+    mov [dsp], rax 
+    NEXT
+
 ; SWAP ( a b -- b a )
 defcode "SWAP", SWAP
     mov rax, [dsp]
@@ -739,6 +766,94 @@ defcode "R@", R_FETCH
     mov rax, [rsp]
     sub dsp, 8
     mov [dsp], rax
+    NEXT
+
+; IF ( flag -- )
+; Compiles 0BRANCH and leaves a placeholder for the offset...
+defcode "IF", IF, F_IMMED
+    ; Compile the ZBRANCH XT.
+    mov rdi, [here]
+    mov rax, ZBRANCH
+    mov [rdi], rax
+    add rdi, 8
+
+    sub dsp, 8
+    mov [dsp], rdi 
+
+    ; Compile a dummy offset and advance here.
+    xor rax, rax 
+    mov [rdi], rax
+    add rdi, 8
+    mov [here], rdi 
+    NEXT
+
+; THEN ( -- )
+; Patches the offset of the previous IF or ELSE.
+defcode "THEN", THEN, F_IMMED
+    ; First we pop the placeholder address to patch.
+    mov rdi, [dsp]
+    add dsp, 8
+
+    ; calculate offset: current_here - placeholder_address.
+    mov rax, [here]
+    sub rax, rdi
+
+    mov [rdi], rax
+    NEXT
+
+; ELSE ( -- )
+; Compiles BRANCH, patches the IF, and leaves a new placeholder.
+; NOTE: Pretty similar to IF in implementation.
+defcode "ELSE", ELSE, F_IMMED
+    ; Compile the BRANCH XT
+    mov rdi, [here]
+    mov rax, BRANCH
+    mov [rdi], rax
+    add rdi, 8
+
+    ; Swap the new placeholder address with the IF placeholder...
+    mov rbx, [dsp]      ; Pop old IF offset address.
+    mov [dsp], rdi      ; Push new ELSE offset address.
+
+    xor rax, rax
+    mov [rdi], rax
+    add rdi, 8
+    mov [here], rdi
+
+    ; Patch the IF offset so it jumps to right here...
+    mov rax, [here]
+    sub rax, rbx
+    mov [rbx], rax
+    NEXT
+
+; BEGIN ( -- )
+; Marks the beginning ofd a loop.
+; Pushes the urrent here address to stack.
+defcode "BEGIN", BEGIN, F_IMMED
+    mov rax, [here]
+    sub dsp, 8
+    mov [dsp], rax
+    NEXT 
+
+; UNTIL ( flag -- )
+; Compiles a conditional backward jump to the address left by BEGIN...
+defcode "UNTIL", UNTIL, F_IMMED
+    ; Compile the ZBRANCH XT 
+    mov rdi, [here]
+    mov rax, ZBRANCH
+    mov [rdi], rax 
+    add rdi, 8
+
+    ; Pop the BEGIN address.
+    mov rax, [dsp]
+    add dsp, 8
+
+    ; BEGIN_address - current_placeholder_address
+    sub rax, rdi
+
+    mov [rdi], rax 
+    add rdi, 8
+    mov [here], rdi 
     NEXT
 
 ; EXIT ( -- )
