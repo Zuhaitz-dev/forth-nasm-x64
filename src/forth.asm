@@ -503,6 +503,7 @@ defcode "FIND", FIND
 
     ; Read length/flags byte (link + 8).
     movzx rbx, byte [rdx + 8]
+    mov r11, rbx    ; Save the full flags byte.
     and rbx, 0x3F   ; Mask out flags.
 
     cmp rbx, rcx    ; We compare lengths first.
@@ -535,8 +536,22 @@ defcode "FIND", FIND
     add rax, 7          ; Align to next 8-byte boundary.
     and rax, ~7
     
-    sub dsp, 8          ; Push XT to data stack
+    sub dsp, 8          ; Push XT to data stack.
     mov [dsp], rax
+    
+    ; check the immediate flag.
+    test r11, F_IMMED
+    jnz .is_immediate 
+
+    ; Normal word (0).
+    sub dsp, 8
+    mov qword [dsp], 0
+    NEXT
+
+.is_immediate:
+    ; Immediate word (1).
+    sub dsp, 8
+    mov qword [dsp], 1 
     NEXT
 
 .mismatch:
@@ -547,7 +562,9 @@ defcode "FIND", FIND
     jmp .search_loop
 
 .not_found:
-    sub dsp, 8
+    ; Push XT = 0, Flag = 0.
+    sub dsp, 16
+    mov qword [dsp + 8], 0
     mov qword [dsp], 0
     NEXT
 
@@ -559,8 +576,9 @@ defcode "PROMPT", PROMPT
     NEXT
 
 defcode "REPL_BRANCH", REPL_BRANCH
-    mov rbx, [dsp]      ; Pop XT or 0
-    add dsp, 8
+    mov rcx, [dsp]          ; Pop immediate flag (1 or 0).
+    mov rbx, [dsp + 8]      ; Pop XT or 0.
+    add dsp, 16
     
     cmp qword [state], 1
     je .compile_mode
@@ -581,9 +599,9 @@ defcode "REPL_BRANCH", REPL_BRANCH
 .compile_mode:
     test rbx, rbx
     jz .compile_number
-    
-    ; If ';', execute immediately to exit compile mode.
-    cmp rbx, SEMICOLON
+   
+    ; If the flag we popped is 1, bypass the compiler and execute now...
+    cmp rcx, 1
     je .execute_immediate
     
     ; Otherwise, we compile it.
@@ -658,13 +676,45 @@ defcode ":", COLON
     NEXT
 
 ; ; ( -- ) Finish compiling.
-defcode ";", SEMICOLON
+defcode ";", SEMICOLON, F_IMMED
     mov rdi, [here]
     mov rax, EXIT
     mov [rdi], rax          ; Write EXIT token.
     add rdi, 8
     mov [here], rdi         ; Advance free memory.
     mov qword [state], 0    ; Compiler mode off.
+    NEXT
+
+; \ ( -- ) Line comment.
+defcode "\", BACKLASH, F_IMMED
+.scan_loop:
+    mov rcx, [to_in]
+    cmp rcx, [num_tib]
+    jge .done   ; If we reached the end of the buffer then we are done.
+
+    mov al, [tib + rcx] ; We read the next character.
+    inc qword [to_in]   ; Advance the >IN pointer.
+
+    cmp al, 10  ; Then we check for newlines.
+    jne .scan_loop
+.done:
+    NEXT
+
+; ( ( -- ) Block comment.
+; NOTE: It's the same as the other one but in this case 
+;       We stop at ')' not '\n'.
+defcode "(", PAREN, F_IMMED
+.scan_loop:
+    mov rcx, [to_in]
+    cmp rcx, [num_tib]
+    jge .done
+
+    mov al, [tib + rcx]
+    inc qword [to_in]
+
+    cmp al, ')'
+    jne .scan_loop
+.done:
     NEXT
 
 ; EXIT ( -- )
