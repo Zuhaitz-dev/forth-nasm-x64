@@ -211,6 +211,7 @@ defcode "DROP", DROP
 ; INCLUDED ( addr len -- )
 ; Opens file and pushes the input source into stack.
 defcode "INCLUDED", INCLUDED
+    push ip
     mov rcx, [dsp]
     mov rsi, [dsp + 8]
     add dsp, 16
@@ -240,6 +241,7 @@ defcode "INCLUDED", INCLUDED
 
     ; Set new source_id (all good).
     mov [source_id], rax
+    pop ip
     NEXT
 
 .file_error:
@@ -248,6 +250,7 @@ defcode "INCLUDED", INCLUDED
     mov rbx, [include_sp]
     sub rbx, 8
     mov [include_sp], rbx
+    pop ip
     NEXT
 
 ; LIT ( a -- )
@@ -423,6 +426,20 @@ defcode "EMIT", EMIT
     pop ip 
 
     add dsp, 8
+    NEXT
+
+; TYPE ( addr len -- )
+; Prints a string to STDOUT.
+defcode "TYPE", TYPE_PRIM
+    push ip
+    mov rdx, [dsp]
+    mov rsi, [dsp + 8]
+    add dsp, 16
+
+    mov rax, SYS_WRITE
+    mov rdi, STDOUT
+    syscall
+    pop ip
     NEXT
 
 ; KEY ( -- c )
@@ -671,6 +688,51 @@ DOCOL:
     mov ip, w   ; Setting IP to it.
     NEXT
 
+; DOVAR ( -- )
+; Execution behavior for variables.
+; Pushes the address of its data field.
+DOVAR:
+    mov rax, w 
+    add rax, 8
+    sub dsp, 8
+    mov [dsp], rax
+    NEXT
+
+; VARIABLE ( -- )
+; Parse the name and create a new dictionary entry. 
+defcode "VARIABLE", VARIABLE 
+    push ip 
+    call read_word_native ; r8 = addr, r9 = len.
+
+    mov rdi, [here]         ; Grab free memory pointer...
+    mov rax, [latest]
+    mov [rdi], rax          ; Write link pointer...
+    mov [latest], rdi
+    add rdi, 8
+    
+    mov [rdi], r9b
+    inc rdi
+    
+    mov rsi, r8
+    mov rcx, r9
+    rep movsb
+    
+    add rdi, 7              ; Align to 8 bytes...
+    and rdi, ~7
+    
+    mov rax, DOVAR          ; Write it into the code field.
+    mov [rdi], rax
+    add rdi, 8
+    
+    xor rax, rax            ; Initialize the variable's memory to 0...
+    mov [rdi], rax
+    add rdi, 8              ; Reserve 1 cell for data.
+    
+    mov [here], rdi
+    
+    pop ip
+    NEXT
+
 ; : ( -- ) Starts compiling.
 defcode ":", COLON
     push ip
@@ -854,6 +916,63 @@ defcode "UNTIL", UNTIL, F_IMMED
     mov [rdi], rax 
     add rdi, 8
     mov [here], rdi 
+    NEXT
+
+; LITSTRING ( -- addr len )
+; Runtime component of S".
+defcode "LITSTRING", LITSTRING
+    lodsq               ; Read the string length into rax.
+                        ; IP now points to the string bytes.
+    
+    sub dsp, 8
+    mov [dsp], ip
+    
+    sub dsp, 8
+    mov [dsp], rax
+    
+    add ip, rax         ; Advance IP past the string bytes.
+    add ip, 7           ; Realign.
+    and ip, ~7
+    NEXT
+
+; S" ( -- )
+; Compile-time string parser. Compiles LITSTRING, length, and string bytes.
+defcode 'S"', S_QUOTE, F_IMMED
+    ; Compile LITSTRING XT
+    mov rdi, [here]
+    mov rax, LITSTRING
+    mov [rdi], rax
+    add rdi, 8
+    
+    ; rbx points to where we will write the string characters.
+    mov rbx, rdi    
+    add rbx, 8          ; Skip 8 bytes for the length field.
+    xor rcx, rcx        ; Length counter.
+    
+.scan_loop:
+    mov r8, [to_in]
+    cmp r8, [num_tib]
+    jge .done
+    
+    mov al, [tib + r8]  ; Read a character from the input buffer.
+    inc qword [to_in]   ; Advance >IN pointer.
+    
+    cmp al, '"'
+    je .done
+    
+    mov [rbx + rcx], al ; Write char directly into dictionary.
+    inc rcx             ; Increment length counter.
+    jmp .scan_loop
+    
+.done:
+    ; Write final length into field we skipped.
+    mov [rdi], rcx
+    
+    ; Update 'here' pointer.
+    lea rdi, [rbx + rcx]
+    add rdi, 7
+    and rdi, ~7
+    mov [here], rdi
     NEXT
 
 ; EXIT ( -- )

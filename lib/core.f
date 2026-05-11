@@ -1,35 +1,25 @@
-\ lib/core.f - Our standard library.
+\ lib/core.f aka standard library for Assembly Forth
 
-: SQUARE ( a -- a^2 ) 
-    DUP * 
-;
-
-: DOUBLE ( a -- a*2 ) 
-    DUP + 
-;
-
-: QUAD ( a -- a*4 ) 
-    DOUBLE DOUBLE 
-;
-
-: ROT ( a b c -- b c a )
-    >R SWAP R> SWAP 
-;
+: SQUARE ( a -- a^2 ) DUP * ;
+: DOUBLE ( a -- a*2 ) DUP + ;
 
 : MAX ( a b -- max )
     2DUP > IF 
-        DROP    \ If a > b, drop b and leave a.
-    ELSE
-        SWAP DROP \ The other way around.
-    THEN
+        DROP 
+    ELSE 
+        SWAP DROP 
+    THEN 
 ;
 
-\ Prints a countdown from n to 1.
 : COUNTDOWN ( n -- )
-    BEGIN
+    BEGIN 
         DUP . CR 
         1 - 
-        DUP 0 =
-    UNTIL
+        DUP 0 = 
+    UNTIL 
     DROP 
+;
+
+: GREETING ( -- )
+    S" Welcome to Assembly Forth!" TYPE CR
 ;
