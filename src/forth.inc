@@ -2,7 +2,7 @@
 
 ; > constants.
 %define DATA_STACK_SIZE 8192 ; 1024 cells * 8 bytes per cell
-%define TERMINAL_INPUT_BUFFER_SIZE 128
+%define TERMINAL_INPUT_BUFFER_SIZE 4096
 %define DICTIONARY_SIZE 8192
 
 ; > system calls.
